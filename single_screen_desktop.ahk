@@ -1,44 +1,19 @@
-/*
-@title Single-Monitor-Desktop
-@version 1.0
-@author blunt
-@description AHK v2 script to minimize windows only on the current monitor.
-@license MIT
-*/
+; ==============================================================================
+; 功能：进阶版 Alt + D (完美对标 Windows 原生逻辑)
+; 逻辑：
+; 1. 如果当前屏幕有可见窗口 -> 最小化它们（并更新记录）
+; 2. 如果当前屏幕已清空 -> 尝试恢复上一次记录的窗口
+; ==============================================================================
 
-#Requires AutoHotkey v2.0
-
-; --- 全局设置 / Global Settings ---
-SetWinDelay -1 ; 极速模式，消除窗口操作延迟
+SetWinDelay -1
 global LastMinimizedWindows := []
 global LastActiveWindowID := 0
 
-; --- 快捷键设定 / Hotkey: Alt + D ---
 !d:: {
     global LastMinimizedWindows, LastActiveWindowID
 
-    ; 模式 A：恢复窗口 (Restore Mode)
-    if (LastMinimizedWindows.Length > 0) {
-        loop LastMinimizedWindows.Length {
-            windowHandle := LastMinimizedWindows.Pop()
-            if WinExist(windowHandle) {
-                WinRestore(windowHandle)
-            }
-        }
-        
-        ; 恢复焦点记忆 (Focus Memory)
-        if (LastActiveWindowID && WinExist(LastActiveWindowID)) {
-            WinActivate(LastActiveWindowID)
-        }
-        
-        LastActiveWindowID := 0 
-        return
-    }
-
-    ; 模式 B：最小化模式 (Minimize Mode)
+    ; 1. 获取当前显示器范围
     MouseGetPos(&mouseX, &mouseY)
-    
-    ; 定位显示器逻辑 (Screen Detection)
     monitorIndex := 1
     monitorCount := MonitorGetCount()
     loop monitorCount {
@@ -50,30 +25,54 @@ global LastActiveWindowID := 0
     }
     MonitorGet(monitorIndex, &mLeft, &mTop, &mRight, &mBottom)
 
-    ; 记录当前活跃窗口 (Record Active Window)
-    LastActiveWindowID := WinExist("A")
+    ; 2. 扫描当前屏幕上是否有“可见”窗口
+    currentVisibleWindows := []
     allWindows := WinGetList()
     
-    Critical "On" ; 开启临界区保护，提升执行效率
     for windowHandle in allWindows {
-        ; 排除非窗口类（任务栏、桌面等）
         if !WinExist(windowHandle) || WinGetClass(windowHandle) = "Shell_TrayWnd" || WinGetClass(windowHandle) = "WorkerW" || WinGetClass(windowHandle) = "Progman"
             continue
 
+        ; 只处理非最小化状态的窗口
         if (WinGetMinMax(windowHandle) != -1) {
             WinGetPos(&wX, &wY, &wWidth, &wHeight, windowHandle)
             centerX := wX + (wWidth / 2)
             centerY := wY + (wHeight / 2)
 
-            ; 判断中心点是否在目标屏幕
             if (centerX >= mLeft && centerX <= mRight && centerY >= mTop && centerY <= mBottom) {
                 style := WinGetStyle(windowHandle)
-                if (style & 0x20000) { ; 0x20000 为 WS_MINIMIZEBOX
-                    LastMinimizedWindows.Push(windowHandle)
-                    WinMinimize(windowHandle)
+                if (style & 0x20000) { 
+                    currentVisibleWindows.Push(windowHandle)
                 }
             }
         }
     }
-    Critical "Off"
+
+    ; --- 核心逻辑判断 ---
+    
+    ; 情况 A：当前屏幕还有窗口在挡着 -> 执行最小化
+    if (currentVisibleWindows.Length > 0) {
+        LastMinimizedWindows := [] ; 清空旧记录，开始新记录
+        LastActiveWindowID := WinExist("A") ; 记录当前的焦点窗口
+
+        Critical "On"
+        for windowHandle in currentVisibleWindows {
+            LastMinimizedWindows.Push(windowHandle)
+            WinMinimize(windowHandle)
+        }
+        Critical "Off"
+    } 
+    ; 情况 B：当前屏幕已经是桌面了 -> 尝试恢复
+    else if (LastMinimizedWindows.Length > 0) {
+        loop LastMinimizedWindows.Length {
+            windowHandle := LastMinimizedWindows.Pop()
+            if WinExist(windowHandle) {
+                WinRestore(windowHandle)
+            }
+        }
+        if (LastActiveWindowID && WinExist(LastActiveWindowID)) {
+            WinActivate(LastActiveWindowID)
+        }
+        LastActiveWindowID := 0
+    }
 }
