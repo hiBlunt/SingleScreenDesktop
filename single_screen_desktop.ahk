@@ -1,25 +1,28 @@
 /*
-@title Single-Screen-Desktop (V2 Fix Version)
-@version 1.1.8
-@description 修复 v2 语法下 CoordMode 参数失效的问题，保持全局坐标一致性
+@title Single-Screen-Desktop
+@version 1.1.9
+@author YourName
+@description AHK v2 script to minimize windows only on the current monitor.
+@license MIT
 */
 
 #Requires AutoHotkey v2.0
 
-; 【核心修复】v2 中只需锁定 Mouse 坐标模式。WinGetPos 在 v2 中默认即为屏幕坐标。
+; --- 全局环境配置 ---
+; 强制使用全局屏幕坐标系，确保多显示器环境下鼠标与窗口判定永不飘移
 CoordMode "Mouse", "Screen"
-CoordMode "Pixel", "Screen" ; 某些像素计算函数会用到，作为全局锁定的双保险
+CoordMode "Pixel", "Screen"
 
-SetWinDelay -1
+SetWinDelay -1 ; 极速模式，消除窗口最小化动画的排队感
 global MonitorHistory := Map()
 global LastActiveWindows := Map()
 
+; --- 快捷键设定：Alt + D ---
 !d:: {
     global MonitorHistory, LastActiveWindows
 
-    ; 1. 获取全局鼠标位置
+    ; 1. 定位当前操作目标（鼠标所在的显示器）
     MouseGetPos(&mouseX, &mouseY)
-    
     mIndex := 1
     mCount := MonitorGetCount()
     loop mCount {
@@ -31,10 +34,11 @@ global LastActiveWindows := Map()
     }
     MonitorGet(mIndex, &mLeft, &mTop, &mRight, &mBottom)
 
+    ; 初始化显示器独立的存储空间
     if !MonitorHistory.Has(mIndex)
         MonitorHistory[mIndex] := []
 
-    ; 2. 扫描物理显示器范围内的窗口
+    ; 2. 扫描该物理显示器内的可见窗口
     currentVisible := []
     allWindows := WinGetList()
     
@@ -47,28 +51,30 @@ global LastActiveWindows := Map()
         title := WinGetTitle(hwnd)
         class := WinGetClass(hwnd)
 
-        ; 过滤系统组件
+        ; 过滤系统组件及无标题的干扰窗口
         if (title == "" || class ~= "Shell_TrayWnd|WorkerW|Progman|EdgeUiInputWndClass")
             continue
 
-        ; 判定：可见 + 非浮窗 + 非最小化
+        ; 兼容性判定逻辑：支持微信、Discord等自定义UI窗口
         if ((style & 0x10000000) && !(exStyle & 0x80) && WinGetMinMax(hwnd) != -1) {
-            ; AHK v2 的 WinGetPos 始终返回屏幕绝对坐标
             WinGetPos(&wX, &wY, &wWidth, &wHeight, hwnd)
             
+            ; 计算窗口重心 P(cX, cY)
             cX := wX + (wWidth / 2)
             cY := wY + (wHeight / 2)
 
-            ; 只有在目标显示器矩形内的窗口才会被处理
+            ; 只有窗口中心点在目标显示器内才执行操作
             if (cX >= mLeft && cX <= mRight && cY >= mTop && cY <= mBottom) {
                 currentVisible.Push(hwnd)
             }
         }
     }
 
-    ; --- 逻辑判断 ---
+    ; --- 核心逻辑决策 ---
+
+    ; 情况 A：当前屏幕有可见窗口 -> 执行最小化并记录
     if (currentVisible.Length > 0) {
-        ; 记录焦点窗口
+        ; 记录当前焦点：仅当活跃窗口确实在鼠标所在屏幕时才记录
         activeHwnd := WinExist("A")
         if (activeHwnd) {
             WinGetPos(&aX, &aY, &aW, &aH, activeHwnd)
@@ -76,7 +82,7 @@ global LastActiveWindows := Map()
                 LastActiveWindows[mIndex] := activeHwnd
         }
 
-        MonitorHistory[mIndex] := []
+        MonitorHistory[mIndex] := [] ; 重置该屏幕的恢复历史
         Critical "On"
         for hwnd in currentVisible {
             MonitorHistory[mIndex].Push(hwnd)
@@ -84,6 +90,7 @@ global LastActiveWindows := Map()
         }
         Critical "Off"
     } 
+    ; 情况 B：当前屏幕已经是桌面状态 -> 尝试恢复该屏幕之前的窗口
     else if (MonitorHistory.Has(mIndex) && MonitorHistory[mIndex].Length > 0) {
         history := MonitorHistory[mIndex]
         loop history.Length {
@@ -91,9 +98,12 @@ global LastActiveWindows := Map()
             if WinExist(hwnd)
                 WinRestore(hwnd)
         }
-        if (LastActiveWindows.Has(mIndex) && WinExist(LastActiveWindows[mIndex])) {
-            WinActivate(LastActiveWindows[mIndex])
+        
+        ; 安全删除键值对，防止 "Item has no value" 报错
+        if (LastActiveWindows.Has(mIndex)) {
+            if WinExist(LastActiveWindows[mIndex])
+                WinActivate(LastActiveWindows[mIndex])
+            LastActiveWindows.Delete(mIndex)
         }
-        LastActiveWindows.Delete(mIndex)
     }
 }
